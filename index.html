@@ -382,12 +382,10 @@
 
     const beadMat = new THREE.MeshStandardMaterial({ color: 0xed9aa6, roughness: 0.52 });
     const anchorGeo = new THREE.SphereGeometry(0.09, 18, 12);
-    for (const i of yarn.fixed) {
-      const bead = new THREE.Mesh(anchorGeo, beadMat);
-      bead.position.copy(yarn.points[i]);
-      bead.castShadow = true;
-      scene.add(bead);
-    }
+    const bead = new THREE.Mesh(anchorGeo, beadMat);
+    bead.position.copy(yarn.points[0]);
+    bead.castShadow = true;
+    scene.add(bead);
 
     const hookCapsule = {
       a: new THREE.Vector3(-1.42, 0, 0),
