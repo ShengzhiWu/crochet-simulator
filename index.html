@@ -336,6 +336,11 @@
     hookTip.castShadow = true;
     hookGroup.add(hookTip);
 
+    const hookJoint = new THREE.Mesh(new THREE.SphereGeometry(0.085, 18, 12), metal);
+    hookJoint.position.copy(hookCollisionPoints[1]);
+    hookJoint.castShadow = true;
+    hookGroup.add(hookJoint);
+
     const roundedTip = new THREE.Mesh(new THREE.SphereGeometry(0.085, 18, 12), metal);
     roundedTip.position.copy(hookCollisionPoints[hookCollisionPoints.length - 1]);
     roundedTip.castShadow = true;
