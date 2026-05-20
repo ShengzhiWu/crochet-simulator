@@ -95,6 +95,7 @@
       view.pitch = THREE.MathUtils.clamp(view.pitch + (event.clientY - view.y) * 0.006, -0.15, 1.15);
       view.x = event.clientX;
       view.y = event.clientY;
+      renderScene();
     });
 
     renderer.domElement.addEventListener("pointerup", () => {
@@ -103,6 +104,7 @@
 
     renderer.domElement.addEventListener("wheel", (event) => {
       view.distance = THREE.MathUtils.clamp(view.distance + event.deltaY * 0.006, 4.5, 12);
+      renderScene();
     }, { passive: true });
 
     updateCamera();
@@ -285,15 +287,7 @@
       yarnMesh.geometry = new THREE.TubeGeometry(curve, 180, yarn.radius, 12, false);
     }
 
-    function animate(time) {
-      requestAnimationFrame(animate);
-
-      const t = time * 0.001;
-      hookGroup.position.y = 0.2 + Math.sin(t * 0.9) * 0.04;
-      hookGroup.rotation.z = -0.12 + Math.sin(t * 0.7) * 0.035;
-
-      stepYarn();
-      updateYarnMesh();
+    function renderScene() {
       updateCamera();
       renderer.render(scene, camera);
     }
@@ -302,9 +296,12 @@
       camera.aspect = innerWidth / innerHeight;
       camera.updateProjectionMatrix();
       renderer.setSize(innerWidth, innerHeight);
+      renderScene();
     });
 
-    animate(0);
+    for (let i = 0; i < 80; i++) stepYarn();
+    updateYarnMesh();
+    renderScene();
   </script>
 </body>
 </html>
