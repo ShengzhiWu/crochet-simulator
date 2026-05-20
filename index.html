@@ -92,10 +92,8 @@
     const hookEndPosition = new THREE.Vector3();
     const hookStartQuaternion = new THREE.Quaternion();
     const hookEndQuaternion = new THREE.Quaternion();
-    const hookStartA = new THREE.Vector3();
-    const hookStartB = new THREE.Vector3();
-    const hookEndA = new THREE.Vector3();
-    const hookEndB = new THREE.Vector3();
+    const hookProbeStart = new THREE.Vector3();
+    const hookProbeEnd = new THREE.Vector3();
 
     function updateCamera() {
       const cp = Math.cos(view.pitch);
@@ -139,14 +137,15 @@
     }
 
     function hookTouchesYarn(padding = 0.08) {
-      tmpA.copy(hookEndpoint(hookCapsule.a));
-      tmpB.copy(hookEndpoint(hookCapsule.b));
+      for (let h = 0; h < hookCollisionPoints.length - 1; h++) {
+        hookSegmentEndpoints(h);
 
-      for (let i = 0; i < yarn.points.length - 1; i++) {
-        const params = closestSegmentParams(tmpA, tmpB, yarn.points[i], yarn.points[i + 1]);
-        tmpP.lerpVectors(tmpA, tmpB, params.s);
-        tmpDelta.lerpVectors(yarn.points[i], yarn.points[i + 1], params.t);
-        if (tmpP.distanceTo(tmpDelta) < hookYarnMinDistance() + padding) return true;
+        for (let i = 0; i < yarn.points.length - 1; i++) {
+          const params = closestSegmentParams(tmpA, tmpB, yarn.points[i], yarn.points[i + 1]);
+          tmpP.lerpVectors(tmpA, tmpB, params.s);
+          tmpDelta.lerpVectors(yarn.points[i], yarn.points[i + 1], params.t);
+          if (tmpP.distanceTo(tmpDelta) < hookYarnMinDistance() + padding) return true;
+        }
       }
 
       return false;
@@ -160,6 +159,18 @@
       return target.copy(localPoint).applyQuaternion(quaternion).add(position);
     }
 
+    function maxHookPointMove(startPosition, startQuaternion, endPosition, endQuaternion) {
+      let maxMove = 0;
+
+      for (const point of hookCollisionPoints) {
+        hookEndpointAt(point, startPosition, startQuaternion, hookProbeStart);
+        hookEndpointAt(point, endPosition, endQuaternion, hookProbeEnd);
+        maxMove = Math.max(maxMove, hookProbeStart.distanceTo(hookProbeEnd));
+      }
+
+      return maxMove;
+    }
+
     function moveHookWithSubsteps(applyTargetMove) {
       hookStartPosition.copy(hookGroup.position);
       hookStartQuaternion.copy(hookGroup.quaternion);
@@ -168,16 +179,13 @@
       hookEndPosition.copy(hookGroup.position);
       hookEndQuaternion.copy(hookGroup.quaternion);
 
-      hookEndpointAt(hookCapsule.a, hookStartPosition, hookStartQuaternion, hookStartA);
-      hookEndpointAt(hookCapsule.b, hookStartPosition, hookStartQuaternion, hookStartB);
-      hookEndpointAt(hookCapsule.a, hookEndPosition, hookEndQuaternion, hookEndA);
-      hookEndpointAt(hookCapsule.b, hookEndPosition, hookEndQuaternion, hookEndB);
-
-      const maxEndpointMove = Math.max(
-        hookStartA.distanceTo(hookEndA),
-        hookStartB.distanceTo(hookEndB)
+      const maxMove = maxHookPointMove(
+        hookStartPosition,
+        hookStartQuaternion,
+        hookEndPosition,
+        hookEndQuaternion
       );
-      const steps = Math.max(1, Math.ceil(maxEndpointMove / hookMoveMaxStep));
+      const steps = Math.max(1, Math.ceil(maxMove / hookMoveMaxStep));
 
       hookGroup.position.copy(hookStartPosition);
       hookGroup.quaternion.copy(hookStartQuaternion);
@@ -304,23 +312,34 @@
       roughness: 0.27
     });
 
-    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.085, 6.7, 28), metal);
+    const hookCollisionPoints = [
+      new THREE.Vector3(-3.1, 0, 0),
+      new THREE.Vector3(3.05, 0, 0),
+      new THREE.Vector3(3.22, 0.03, 0),
+      new THREE.Vector3(3.36, 0.13, 0),
+      new THREE.Vector3(3.42, 0.27, 0),
+      new THREE.Vector3(3.37, 0.42, 0),
+      new THREE.Vector3(3.24, 0.54, 0),
+      new THREE.Vector3(3.05, 0.58, 0),
+      new THREE.Vector3(2.88, 0.53, 0),
+      new THREE.Vector3(2.75, 0.43, 0)
+    ];
+
+    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.085, 6.15, 28), metal);
     shaft.rotation.z = Math.PI / 2;
+    shaft.position.x = -0.025;
     shaft.castShadow = true;
     hookGroup.add(shaft);
 
-    const tip = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.36, 28), metal);
-    tip.rotation.z = -Math.PI / 2;
-    tip.position.x = 3.53;
-    tip.castShadow = true;
-    hookGroup.add(tip);
+    const hookCurve = new THREE.CatmullRomCurve3(hookCollisionPoints.slice(1));
+    const hookTip = new THREE.Mesh(new THREE.TubeGeometry(hookCurve, 48, 0.085, 16, false), metal);
+    hookTip.castShadow = true;
+    hookGroup.add(hookTip);
 
-    const throat = new THREE.Mesh(new THREE.TorusGeometry(0.155, 0.038, 14, 36, Math.PI * 1.15), metal);
-    throat.rotation.set(0, Math.PI / 2, Math.PI * 0.12);
-    throat.position.set(3.23, 0.13, 0);
-    throat.scale.set(1, 0.72, 1);
-    throat.castShadow = true;
-    hookGroup.add(throat);
+    const roundedTip = new THREE.Mesh(new THREE.SphereGeometry(0.085, 18, 12), metal);
+    roundedTip.position.copy(hookCollisionPoints[hookCollisionPoints.length - 1]);
+    roundedTip.castShadow = true;
+    hookGroup.add(roundedTip);
 
     hookGroup.position.set(0.25, 0.18, 0);
     hookGroup.rotation.set(0.1, 0, -0.1);
@@ -376,11 +395,7 @@
     bead.castShadow = true;
     scene.add(bead);
 
-    const hookCapsule = {
-      a: new THREE.Vector3(-3.09, 0, 0),
-      b: new THREE.Vector3(3.39, 0, 0),
-      radius: 0.15
-    };
+    const hookCollisionRadius = 0.15;
 
     const tmpA = new THREE.Vector3();
     const tmpB = new THREE.Vector3();
@@ -391,13 +406,19 @@
     const tmpPrev = new THREE.Vector3();
     const tmpNext = new THREE.Vector3();
     const tmpMid = new THREE.Vector3();
+    const tmpClosest = new THREE.Vector3();
 
     function hookEndpoint(localPoint) {
       return hookGroup.localToWorld(localPoint.clone());
     }
 
     function hookYarnMinDistance() {
-      return (hookCapsule.radius + yarn.radius) * yarn.hookCollisionScale;
+      return (hookCollisionRadius + yarn.radius) * yarn.hookCollisionScale;
+    }
+
+    function hookSegmentEndpoints(index) {
+      tmpA.copy(hookEndpoint(hookCollisionPoints[index]));
+      tmpB.copy(hookEndpoint(hookCollisionPoints[index + 1]));
     }
 
     function closestPointOnSegment(point, a, b, target) {
@@ -407,11 +428,20 @@
     }
 
     function collideWithHook(point) {
-      tmpA.copy(hookEndpoint(hookCapsule.a));
-      tmpB.copy(hookEndpoint(hookCapsule.b));
-      closestPointOnSegment(point, tmpA, tmpB, tmpP);
+      let bestDistance = Infinity;
 
-      const delta = tmpDelta.subVectors(point, tmpP);
+      for (let h = 0; h < hookCollisionPoints.length - 1; h++) {
+        hookSegmentEndpoints(h);
+        closestPointOnSegment(point, tmpA, tmpB, tmpP);
+        const distance = point.distanceTo(tmpP);
+
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          tmpClosest.copy(tmpP);
+        }
+      }
+
+      const delta = tmpDelta.subVectors(point, tmpClosest);
       const distance = delta.length();
       const minDistance = hookYarnMinDistance();
 
@@ -423,24 +453,25 @@
     }
 
     function collideSegmentWithHook(index) {
-      tmpA.copy(hookEndpoint(hookCapsule.a));
-      tmpB.copy(hookEndpoint(hookCapsule.b));
+      for (let h = 0; h < hookCollisionPoints.length - 1; h++) {
+        hookSegmentEndpoints(h);
 
-      const params = closestSegmentParams(tmpA, tmpB, yarn.points[index], yarn.points[index + 1]);
-      tmpP.lerpVectors(tmpA, tmpB, params.s);
-      tmpDelta.lerpVectors(yarn.points[index], yarn.points[index + 1], params.t);
+        const params = closestSegmentParams(tmpA, tmpB, yarn.points[index], yarn.points[index + 1]);
+        tmpP.lerpVectors(tmpA, tmpB, params.s);
+        tmpDelta.lerpVectors(yarn.points[index], yarn.points[index + 1], params.t);
 
-      tmpNormal.subVectors(tmpDelta, tmpP);
-      const distance = tmpNormal.length();
-      const minDistance = hookYarnMinDistance();
-      if (distance >= minDistance) return;
+        tmpNormal.subVectors(tmpDelta, tmpP);
+        const distance = tmpNormal.length();
+        const minDistance = hookYarnMinDistance();
+        if (distance >= minDistance) continue;
 
-      if (distance < 0.0001) tmpNormal.set(0, 1, 0);
-      else tmpNormal.multiplyScalar(1 / distance);
+        if (distance < 0.0001) tmpNormal.set(0, 1, 0);
+        else tmpNormal.multiplyScalar(1 / distance);
 
-      const correction = (minDistance - distance) * 0.55;
-      moveYarnPoint(index, tmpNormal, correction * (1 - params.t));
-      moveYarnPoint(index + 1, tmpNormal, correction * params.t);
+        const correction = (minDistance - distance) * 0.55;
+        moveYarnPoint(index, tmpNormal, correction * (1 - params.t));
+        moveYarnPoint(index + 1, tmpNormal, correction * params.t);
+      }
     }
 
     function satisfyDistance(a, b, wanted, aFixed, bFixed) {
@@ -546,16 +577,18 @@
     }
 
     function minHookClearance() {
-      tmpA.copy(hookEndpoint(hookCapsule.a));
-      tmpB.copy(hookEndpoint(hookCapsule.b));
       let clearance = Infinity;
       const minDistance = hookYarnMinDistance();
 
-      for (let i = 0; i < yarn.points.length - 1; i++) {
-        const params = closestSegmentParams(tmpA, tmpB, yarn.points[i], yarn.points[i + 1]);
-        tmpP.lerpVectors(tmpA, tmpB, params.s);
-        tmpDelta.lerpVectors(yarn.points[i], yarn.points[i + 1], params.t);
-        clearance = Math.min(clearance, tmpP.distanceTo(tmpDelta) - minDistance);
+      for (let h = 0; h < hookCollisionPoints.length - 1; h++) {
+        hookSegmentEndpoints(h);
+
+        for (let i = 0; i < yarn.points.length - 1; i++) {
+          const params = closestSegmentParams(tmpA, tmpB, yarn.points[i], yarn.points[i + 1]);
+          tmpP.lerpVectors(tmpA, tmpB, params.s);
+          tmpDelta.lerpVectors(yarn.points[i], yarn.points[i + 1], params.t);
+          clearance = Math.min(clearance, tmpP.distanceTo(tmpDelta) - minDistance);
+        }
       }
 
       return clearance;
