@@ -304,31 +304,20 @@
       roughness: 0.27
     });
 
-    const handleMat = new THREE.MeshStandardMaterial({
-      color: 0x4f6f65,
-      roughness: 0.58
-    });
-
-    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.085, 3.35, 28), metal);
+    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.085, 6.7, 28), metal);
     shaft.rotation.z = Math.PI / 2;
     shaft.castShadow = true;
     hookGroup.add(shaft);
 
-    const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 1.1, 28), handleMat);
-    handle.rotation.z = Math.PI / 2;
-    handle.position.x = -1.65;
-    handle.castShadow = true;
-    hookGroup.add(handle);
-
     const tip = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.36, 28), metal);
     tip.rotation.z = -Math.PI / 2;
-    tip.position.x = 1.86;
+    tip.position.x = 3.53;
     tip.castShadow = true;
     hookGroup.add(tip);
 
     const throat = new THREE.Mesh(new THREE.TorusGeometry(0.155, 0.038, 14, 36, Math.PI * 1.15), metal);
     throat.rotation.set(0, Math.PI / 2, Math.PI * 0.12);
-    throat.position.set(1.56, 0.13, 0);
+    throat.position.set(3.23, 0.13, 0);
     throat.scale.set(1, 0.72, 1);
     throat.castShadow = true;
     hookGroup.add(throat);
@@ -388,8 +377,8 @@
     scene.add(bead);
 
     const hookCapsule = {
-      a: new THREE.Vector3(-1.42, 0, 0),
-      b: new THREE.Vector3(1.72, 0, 0),
+      a: new THREE.Vector3(-3.09, 0, 0),
+      b: new THREE.Vector3(3.39, 0, 0),
       radius: 0.15
     };
 
