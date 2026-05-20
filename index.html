@@ -296,7 +296,10 @@
       fixed: new Set([0, 1]),
       segmentLength: 0.16,
       radius: 0.055,
-      damping: 0.985
+      damping: 0.985,
+      maxBendAngle: 0.55,
+      bendStrength: 0.22,
+      selfCollisionStrength: 0.42
     };
 
     for (let i = 0; i < 54; i++) {
@@ -339,6 +342,10 @@
     const tmpP = new THREE.Vector3();
     const tmpAxis = new THREE.Vector3();
     const tmpDelta = new THREE.Vector3();
+    const tmpNormal = new THREE.Vector3();
+    const tmpPrev = new THREE.Vector3();
+    const tmpNext = new THREE.Vector3();
+    const tmpMid = new THREE.Vector3();
 
     function hookEndpoint(localPoint) {
       return hookGroup.localToWorld(localPoint.clone());
@@ -381,6 +388,93 @@
       }
     }
 
+    function moveYarnPoint(index, offset, scale) {
+      if (!yarn.fixed.has(index)) yarn.points[index].addScaledVector(offset, scale);
+    }
+
+    function limitBend(index) {
+      if (yarn.fixed.has(index)) return;
+
+      const prev = yarn.points[index - 1];
+      const point = yarn.points[index];
+      const next = yarn.points[index + 1];
+      tmpPrev.subVectors(point, prev).normalize();
+      tmpNext.subVectors(next, point).normalize();
+
+      const bendAngle = tmpPrev.angleTo(tmpNext);
+      if (bendAngle <= yarn.maxBendAngle) return;
+
+      tmpMid.addVectors(prev, next).multiplyScalar(0.5);
+      tmpDelta.subVectors(tmpMid, point);
+      point.addScaledVector(tmpDelta, yarn.bendStrength * (bendAngle - yarn.maxBendAngle) / Math.PI);
+    }
+
+    function closestSegmentParams(p1, q1, p2, q2) {
+      const d1 = tmpPrev.subVectors(q1, p1);
+      const d2 = tmpNext.subVectors(q2, p2);
+      const r = tmpMid.subVectors(p1, p2);
+      const a = d1.dot(d1);
+      const e = d2.dot(d2);
+      const f = d2.dot(r);
+      let s = 0;
+      let t = 0;
+
+      if (a <= 0.0001 && e <= 0.0001) return { s, t };
+      if (a <= 0.0001) {
+        t = THREE.MathUtils.clamp(f / e, 0, 1);
+      } else {
+        const c = d1.dot(r);
+        if (e <= 0.0001) {
+          s = THREE.MathUtils.clamp(-c / a, 0, 1);
+        } else {
+          const b = d1.dot(d2);
+          const denom = a * e - b * b;
+          if (denom !== 0) s = THREE.MathUtils.clamp((b * f - c * e) / denom, 0, 1);
+          t = (b * s + f) / e;
+
+          if (t < 0) {
+            t = 0;
+            s = THREE.MathUtils.clamp(-c / a, 0, 1);
+          } else if (t > 1) {
+            t = 1;
+            s = THREE.MathUtils.clamp((b - c) / a, 0, 1);
+          }
+        }
+      }
+
+      return { s, t };
+    }
+
+    function preventSelfIntersection() {
+      const minDistance = yarn.radius * 2.15;
+
+      for (let i = 0; i < yarn.points.length - 1; i++) {
+        for (let j = i + 3; j < yarn.points.length - 1; j++) {
+          const params = closestSegmentParams(
+            yarn.points[i],
+            yarn.points[i + 1],
+            yarn.points[j],
+            yarn.points[j + 1]
+          );
+
+          tmpA.lerpVectors(yarn.points[i], yarn.points[i + 1], params.s);
+          tmpB.lerpVectors(yarn.points[j], yarn.points[j + 1], params.t);
+          tmpNormal.subVectors(tmpA, tmpB);
+          const distance = tmpNormal.length();
+          if (distance >= minDistance) continue;
+
+          if (distance < 0.0001) tmpNormal.set(0, 1, 0);
+          else tmpNormal.multiplyScalar(1 / distance);
+
+          const correction = (minDistance - distance) * yarn.selfCollisionStrength;
+          moveYarnPoint(i, tmpNormal, correction * (1 - params.s) * 0.5);
+          moveYarnPoint(i + 1, tmpNormal, correction * params.s * 0.5);
+          moveYarnPoint(j, tmpNormal, -correction * (1 - params.t) * 0.5);
+          moveYarnPoint(j + 1, tmpNormal, -correction * params.t * 0.5);
+        }
+      }
+    }
+
     function stepYarn() {
       for (let i = 0; i < yarn.points.length; i++) {
         if (yarn.fixed.has(i)) continue;
@@ -401,6 +495,12 @@
             yarn.fixed.has(i + 1)
           );
         }
+
+        for (let i = 1; i < yarn.points.length - 1; i++) {
+          limitBend(i);
+        }
+
+        preventSelfIntersection();
 
         for (let i = 0; i < yarn.points.length; i++) {
           if (!yarn.fixed.has(i)) collideWithHook(yarn.points[i]);
