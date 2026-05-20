@@ -123,8 +123,8 @@
       cameraUp.crossVectors(cameraRight, cameraForward).normalize();
     }
 
-    function settleYarn(iterations = 16) {
-      for (let i = 0; i < iterations; i++) stepYarn();
+    function settleYarn(iterations = 12) {
+      solveYarnConstraints(iterations);
       for (let i = 0; i < yarn.points.length; i++) yarn.previous[i].copy(yarn.points[i]);
       updateYarnMesh();
     }
@@ -294,12 +294,12 @@
       points: [],
       previous: [],
       fixed: new Set([0, 1]),
-      segmentLength: 0.16,
+      segmentLength: 0,
       radius: 0.055,
       damping: 0.985,
       maxBendAngle: 0.55,
-      bendStrength: 0.22,
-      selfCollisionStrength: 0.42
+      bendStrength: 0.14,
+      selfCollisionStrength: 0.2
     };
 
     for (let i = 0; i < 54; i++) {
@@ -313,6 +313,11 @@
       yarn.points.push(p);
       yarn.previous.push(p.clone());
     }
+
+    for (let i = 0; i < yarn.points.length - 1; i++) {
+      yarn.segmentLength += yarn.points[i].distanceTo(yarn.points[i + 1]);
+    }
+    yarn.segmentLength /= yarn.points.length - 1;
 
     const curve = new THREE.CatmullRomCurve3(yarn.points);
     const yarnMesh = new THREE.Mesh(
@@ -475,17 +480,8 @@
       }
     }
 
-    function stepYarn() {
-      for (let i = 0; i < yarn.points.length; i++) {
-        if (yarn.fixed.has(i)) continue;
-
-        const p = yarn.points[i];
-        const velocity = p.clone().sub(yarn.previous[i]).multiplyScalar(yarn.damping);
-        yarn.previous[i].copy(p);
-        p.add(velocity);
-      }
-
-      for (let pass = 0; pass < 8; pass++) {
+    function solveYarnConstraints(passes = 8) {
+      for (let pass = 0; pass < passes; pass++) {
         for (let i = 0; i < yarn.points.length - 1; i++) {
           satisfyDistance(
             yarn.points[i],
@@ -496,16 +492,41 @@
           );
         }
 
-        for (let i = 1; i < yarn.points.length - 1; i++) {
-          limitBend(i);
+        if (pass % 2 === 0) {
+          for (let i = 1; i < yarn.points.length - 1; i++) {
+            limitBend(i);
+          }
         }
-
-        preventSelfIntersection();
 
         for (let i = 0; i < yarn.points.length; i++) {
           if (!yarn.fixed.has(i)) collideWithHook(yarn.points[i]);
         }
       }
+
+      preventSelfIntersection();
+
+      for (let i = 0; i < yarn.points.length - 1; i++) {
+        satisfyDistance(
+          yarn.points[i],
+          yarn.points[i + 1],
+          yarn.segmentLength,
+          yarn.fixed.has(i),
+          yarn.fixed.has(i + 1)
+        );
+      }
+    }
+
+    function stepYarn() {
+      for (let i = 0; i < yarn.points.length; i++) {
+        if (yarn.fixed.has(i)) continue;
+
+        const p = yarn.points[i];
+        const velocity = p.clone().sub(yarn.previous[i]).multiplyScalar(yarn.damping);
+        yarn.previous[i].copy(p);
+        p.add(velocity);
+      }
+
+      solveYarnConstraints();
     }
 
     function updateYarnMesh() {
@@ -526,8 +547,7 @@
       renderScene();
     });
 
-    for (let i = 0; i < 80; i++) stepYarn();
-    updateYarnMesh();
+    settleYarn(80);
     renderScene();
   </script>
 </body>
