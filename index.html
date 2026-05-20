@@ -146,7 +146,7 @@
         const params = closestSegmentParams(tmpA, tmpB, yarn.points[i], yarn.points[i + 1]);
         tmpP.lerpVectors(tmpA, tmpB, params.s);
         tmpDelta.lerpVectors(yarn.points[i], yarn.points[i + 1], params.t);
-        if (tmpP.distanceTo(tmpDelta) < hookCapsule.radius + yarn.radius + padding) return true;
+        if (tmpP.distanceTo(tmpDelta) < hookYarnMinDistance() + padding) return true;
       }
 
       return false;
@@ -351,7 +351,8 @@
       damping: 0.985,
       maxBendAngle: 0.55,
       bendStrength: 0.14,
-      selfCollisionStrength: 0.2
+      selfCollisionStrength: 0.2,
+      hookCollisionScale: 0.6
     };
 
     for (let i = 0; i < 54; i++) {
@@ -408,6 +409,10 @@
       return hookGroup.localToWorld(localPoint.clone());
     }
 
+    function hookYarnMinDistance() {
+      return (hookCapsule.radius + yarn.radius) * yarn.hookCollisionScale;
+    }
+
     function closestPointOnSegment(point, a, b, target) {
       tmpAxis.subVectors(b, a);
       const t = THREE.MathUtils.clamp(point.clone().sub(a).dot(tmpAxis) / tmpAxis.lengthSq(), 0, 1);
@@ -421,7 +426,7 @@
 
       const delta = tmpDelta.subVectors(point, tmpP);
       const distance = delta.length();
-      const minDistance = hookCapsule.radius + yarn.radius;
+      const minDistance = hookYarnMinDistance();
 
       if (distance < minDistance) {
         if (distance < 0.0001) delta.set(0, 1, 0);
@@ -440,7 +445,7 @@
 
       tmpNormal.subVectors(tmpDelta, tmpP);
       const distance = tmpNormal.length();
-      const minDistance = hookCapsule.radius + yarn.radius;
+      const minDistance = hookYarnMinDistance();
       if (distance >= minDistance) return;
 
       if (distance < 0.0001) tmpNormal.set(0, 1, 0);
@@ -557,7 +562,7 @@
       tmpA.copy(hookEndpoint(hookCapsule.a));
       tmpB.copy(hookEndpoint(hookCapsule.b));
       let clearance = Infinity;
-      const minDistance = hookCapsule.radius + yarn.radius;
+      const minDistance = hookYarnMinDistance();
 
       for (let i = 0; i < yarn.points.length - 1; i++) {
         const params = closestSegmentParams(tmpA, tmpB, yarn.points[i], yarn.points[i + 1]);
