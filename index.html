@@ -44,7 +44,7 @@
 <body>
   <div class="hud">
     <strong>钩织模拟器原型</strong>
-    <span>点钩针后拖动，G 移动 / R 旋转，Q/E 滚转</span>
+    <span>点钩针后拖动，G 移动 / R 旋转，Q/E 滚转，W/S 深度</span>
     <span id="modeLabel">当前：视角</span>
   </div>
 
@@ -250,15 +250,6 @@
     });
 
     renderer.domElement.addEventListener("wheel", (event) => {
-      if (drag.target === "hook") {
-        cameraBasis();
-        moveHookWithSubsteps(() => {
-          hookGroup.position.addScaledVector(cameraForward, event.deltaY * 0.006);
-        });
-        renderScene();
-        return;
-      }
-
       view.distance += event.deltaY * 0.006;
       renderScene();
     }, { passive: true });
