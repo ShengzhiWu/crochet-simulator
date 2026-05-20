@@ -87,6 +87,15 @@
     const cameraUp = new THREE.Vector3();
     const cameraForward = new THREE.Vector3();
     const maxPitch = Math.PI / 2 - 0.001;
+    const hookMoveMaxStep = 0.045;
+    const hookStartPosition = new THREE.Vector3();
+    const hookEndPosition = new THREE.Vector3();
+    const hookStartQuaternion = new THREE.Quaternion();
+    const hookEndQuaternion = new THREE.Quaternion();
+    const hookStartA = new THREE.Vector3();
+    const hookStartB = new THREE.Vector3();
+    const hookEndA = new THREE.Vector3();
+    const hookEndB = new THREE.Vector3();
 
     function updateCamera() {
       const cp = Math.cos(view.pitch);
@@ -124,7 +133,7 @@
     }
 
     function settleYarn(iterations = 12) {
-      solveYarnConstraints(iterations);
+      solveYarnConstraints(Math.max(iterations, 64));
       for (let i = 0; i < yarn.points.length; i++) yarn.previous[i].copy(yarn.points[i]);
       updateYarnMesh();
     }
@@ -133,9 +142,11 @@
       tmpA.copy(hookEndpoint(hookCapsule.a));
       tmpB.copy(hookEndpoint(hookCapsule.b));
 
-      for (const point of yarn.points) {
-        closestPointOnSegment(point, tmpA, tmpB, tmpP);
-        if (point.distanceTo(tmpP) < hookCapsule.radius + yarn.radius + padding) return true;
+      for (let i = 0; i < yarn.points.length - 1; i++) {
+        const params = closestSegmentParams(tmpA, tmpB, yarn.points[i], yarn.points[i + 1]);
+        tmpP.lerpVectors(tmpA, tmpB, params.s);
+        tmpDelta.lerpVectors(yarn.points[i], yarn.points[i + 1], params.t);
+        if (tmpP.distanceTo(tmpDelta) < hookCapsule.radius + yarn.radius + padding) return true;
       }
 
       return false;
@@ -143,6 +154,41 @@
 
     function reactToHookMove() {
       if (hookTouchesYarn()) settleYarn();
+    }
+
+    function hookEndpointAt(localPoint, position, quaternion, target) {
+      return target.copy(localPoint).applyQuaternion(quaternion).add(position);
+    }
+
+    function moveHookWithSubsteps(applyTargetMove) {
+      hookStartPosition.copy(hookGroup.position);
+      hookStartQuaternion.copy(hookGroup.quaternion);
+
+      applyTargetMove();
+      hookEndPosition.copy(hookGroup.position);
+      hookEndQuaternion.copy(hookGroup.quaternion);
+
+      hookEndpointAt(hookCapsule.a, hookStartPosition, hookStartQuaternion, hookStartA);
+      hookEndpointAt(hookCapsule.b, hookStartPosition, hookStartQuaternion, hookStartB);
+      hookEndpointAt(hookCapsule.a, hookEndPosition, hookEndQuaternion, hookEndA);
+      hookEndpointAt(hookCapsule.b, hookEndPosition, hookEndQuaternion, hookEndB);
+
+      const maxEndpointMove = Math.max(
+        hookStartA.distanceTo(hookEndA),
+        hookStartB.distanceTo(hookEndB)
+      );
+      const steps = Math.max(1, Math.ceil(maxEndpointMove / hookMoveMaxStep));
+
+      hookGroup.position.copy(hookStartPosition);
+      hookGroup.quaternion.copy(hookStartQuaternion);
+
+      for (let i = 1; i <= steps; i++) {
+        const t = i / steps;
+        hookGroup.position.lerpVectors(hookStartPosition, hookEndPosition, t);
+        hookGroup.quaternion.slerpQuaternions(hookStartQuaternion, hookEndQuaternion, t);
+        hookGroup.updateMatrixWorld(true);
+        reactToHookMove();
+      }
     }
 
     renderer.domElement.addEventListener("pointerdown", (event) => {
@@ -168,14 +214,17 @@
         cameraBasis();
 
         if (drag.mode === "move") {
-          hookGroup.position.addScaledVector(cameraRight, dx * 0.008);
-          hookGroup.position.addScaledVector(cameraUp, -dy * 0.008);
+          moveHookWithSubsteps(() => {
+            hookGroup.position.addScaledVector(cameraRight, dx * 0.008);
+            hookGroup.position.addScaledVector(cameraUp, -dy * 0.008);
+          });
         } else {
-          hookGroup.rotateOnWorldAxis(cameraUp, dx * 0.01);
-          hookGroup.rotateOnWorldAxis(cameraRight, dy * 0.01);
+          moveHookWithSubsteps(() => {
+            hookGroup.rotateOnWorldAxis(cameraUp, dx * 0.01);
+            hookGroup.rotateOnWorldAxis(cameraRight, dy * 0.01);
+          });
         }
 
-        reactToHookMove();
         renderScene();
         return;
       }
@@ -195,8 +244,9 @@
     renderer.domElement.addEventListener("wheel", (event) => {
       if (drag.target === "hook") {
         cameraBasis();
-        hookGroup.position.addScaledVector(cameraForward, event.deltaY * 0.006);
-        reactToHookMove();
+        moveHookWithSubsteps(() => {
+          hookGroup.position.addScaledVector(cameraForward, event.deltaY * 0.006);
+        });
         renderScene();
         return;
       }
@@ -221,15 +271,17 @@
         updateModeLabel();
       } else if (key === "q" || key === "e") {
         drag.target = "hook";
-        hookGroup.rotateX((key === "q" ? 1 : -1) * 0.12);
-        reactToHookMove();
+        moveHookWithSubsteps(() => {
+          hookGroup.rotateX((key === "q" ? 1 : -1) * 0.12);
+        });
         updateModeLabel();
         renderScene();
       } else if (key === "w" || key === "s") {
         drag.target = "hook";
         cameraBasis();
-        hookGroup.position.addScaledVector(cameraForward, (key === "w" ? 1 : -1) * 0.08);
-        reactToHookMove();
+        moveHookWithSubsteps(() => {
+          hookGroup.position.addScaledVector(cameraForward, (key === "w" ? 1 : -1) * 0.08);
+        });
         updateModeLabel();
         renderScene();
       }
@@ -378,6 +430,27 @@
       }
     }
 
+    function collideSegmentWithHook(index) {
+      tmpA.copy(hookEndpoint(hookCapsule.a));
+      tmpB.copy(hookEndpoint(hookCapsule.b));
+
+      const params = closestSegmentParams(tmpA, tmpB, yarn.points[index], yarn.points[index + 1]);
+      tmpP.lerpVectors(tmpA, tmpB, params.s);
+      tmpDelta.lerpVectors(yarn.points[index], yarn.points[index + 1], params.t);
+
+      tmpNormal.subVectors(tmpDelta, tmpP);
+      const distance = tmpNormal.length();
+      const minDistance = hookCapsule.radius + yarn.radius;
+      if (distance >= minDistance) return;
+
+      if (distance < 0.0001) tmpNormal.set(0, 1, 0);
+      else tmpNormal.multiplyScalar(1 / distance);
+
+      const correction = (minDistance - distance) * 0.55;
+      moveYarnPoint(index, tmpNormal, correction * (1 - params.t));
+      moveYarnPoint(index + 1, tmpNormal, correction * params.t);
+    }
+
     function satisfyDistance(a, b, wanted, aFixed, bFixed) {
       const delta = tmpAxis.subVectors(b, a);
       const distance = Math.max(delta.length(), 0.0001);
@@ -480,8 +553,50 @@
       }
     }
 
-    function solveYarnConstraints(passes = 8) {
-      for (let pass = 0; pass < passes; pass++) {
+    function minHookClearance() {
+      tmpA.copy(hookEndpoint(hookCapsule.a));
+      tmpB.copy(hookEndpoint(hookCapsule.b));
+      let clearance = Infinity;
+      const minDistance = hookCapsule.radius + yarn.radius;
+
+      for (let i = 0; i < yarn.points.length - 1; i++) {
+        const params = closestSegmentParams(tmpA, tmpB, yarn.points[i], yarn.points[i + 1]);
+        tmpP.lerpVectors(tmpA, tmpB, params.s);
+        tmpDelta.lerpVectors(yarn.points[i], yarn.points[i + 1], params.t);
+        clearance = Math.min(clearance, tmpP.distanceTo(tmpDelta) - minDistance);
+      }
+
+      return clearance;
+    }
+
+    function minSelfClearance() {
+      let clearance = Infinity;
+      const minDistance = yarn.radius * 2.15;
+
+      for (let i = 0; i < yarn.points.length - 1; i++) {
+        for (let j = i + 3; j < yarn.points.length - 1; j++) {
+          const params = closestSegmentParams(
+            yarn.points[i],
+            yarn.points[i + 1],
+            yarn.points[j],
+            yarn.points[j + 1]
+          );
+
+          tmpA.lerpVectors(yarn.points[i], yarn.points[i + 1], params.s);
+          tmpB.lerpVectors(yarn.points[j], yarn.points[j + 1], params.t);
+          clearance = Math.min(clearance, tmpA.distanceTo(tmpB) - minDistance);
+        }
+      }
+
+      return clearance;
+    }
+
+    function hasUnsafeClearance() {
+      return minHookClearance() < 0.002 || minSelfClearance() < 0.002;
+    }
+
+    function solveYarnConstraints(maxPasses = 48) {
+      for (let pass = 0; pass < maxPasses; pass++) {
         for (let i = 0; i < yarn.points.length - 1; i++) {
           satisfyDistance(
             yarn.points[i],
@@ -498,12 +613,18 @@
           }
         }
 
+        for (let i = 0; i < yarn.points.length - 1; i++) {
+          collideSegmentWithHook(i);
+        }
+
         for (let i = 0; i < yarn.points.length; i++) {
           if (!yarn.fixed.has(i)) collideWithHook(yarn.points[i]);
         }
-      }
 
-      preventSelfIntersection();
+        preventSelfIntersection();
+
+        if (!hasUnsafeClearance()) break;
+      }
 
       for (let i = 0; i < yarn.points.length - 1; i++) {
         satisfyDistance(
@@ -514,6 +635,16 @@
           yarn.fixed.has(i + 1)
         );
       }
+
+      for (let i = 0; i < yarn.points.length - 1; i++) {
+        collideSegmentWithHook(i);
+      }
+
+      for (let i = 0; i < yarn.points.length; i++) {
+        if (!yarn.fixed.has(i)) collideWithHook(yarn.points[i]);
+      }
+
+      preventSelfIntersection();
     }
 
     function stepYarn() {
