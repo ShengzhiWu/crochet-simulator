@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>钩织模拟器</title>
+  <style>
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #eef0ea;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    canvas {
+      display: block;
+    }
+
+    .hud {
+      position: fixed;
+      left: 18px;
+      top: 16px;
+      color: #2f332d;
+      line-height: 1.45;
+      pointer-events: none;
+      text-shadow: 0 1px 0 rgba(255, 255, 255, 0.65);
+    }
+
+    .hud strong {
+      display: block;
+      font-size: 14px;
+      margin-bottom: 3px;
+    }
+
+    .hud span {
+      display: block;
+      font-size: 12px;
+      opacity: 0.72;
+    }
+  </style>
+</head>
+<body>
+  <div class="hud">
+    <strong>钩织模拟器原型</strong>
+    <span>自写线段约束 + 钩针碰撞</span>
+  </div>
+
+  <script type="module">
+    import * as THREE from "https://esm.sh/three@0.165.0";
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0xeef0ea);
+
+    const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.1, 100);
+    camera.position.set(0, 3.2, 7.8);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.shadowMap.enabled = true;
+    document.body.appendChild(renderer.domElement);
+
+    const view = {
+      target: new THREE.Vector3(0, 0.55, 0),
+      distance: 8.4,
+      yaw: 0,
+      pitch: 0.35,
+      dragging: false,
+      x: 0,
+      y: 0
+    };
+
+    function updateCamera() {
+      const cp = Math.cos(view.pitch);
+      camera.position.set(
+        Math.sin(view.yaw) * cp * view.distance,
+        Math.sin(view.pitch) * view.distance + view.target.y,
+        Math.cos(view.yaw) * cp * view.distance
+      );
+      camera.lookAt(view.target);
+    }
+
+    renderer.domElement.addEventListener("pointerdown", (event) => {
+      view.dragging = true;
+      view.x = event.clientX;
+      view.y = event.clientY;
+      renderer.domElement.setPointerCapture(event.pointerId);
+    });
+
+    renderer.domElement.addEventListener("pointermove", (event) => {
+      if (!view.dragging) return;
+      view.yaw -= (event.clientX - view.x) * 0.006;
+      view.pitch = THREE.MathUtils.clamp(view.pitch + (event.clientY - view.y) * 0.006, -0.15, 1.15);
+      view.x = event.clientX;
+      view.y = event.clientY;
+    });
+
+    renderer.domElement.addEventListener("pointerup", () => {
+      view.dragging = false;
+    });
+
+    renderer.domElement.addEventListener("wheel", (event) => {
+      view.distance = THREE.MathUtils.clamp(view.distance + event.deltaY * 0.006, 4.5, 12);
+    }, { passive: true });
+
+    updateCamera();
+
+    scene.add(new THREE.HemisphereLight(0xffffff, 0xb5b1a2, 2.3));
+    const sun = new THREE.DirectionalLight(0xffffff, 2.4);
+    sun.position.set(3, 5, 4);
+    sun.castShadow = true;
+    scene.add(sun);
+
+    const hookGroup = new THREE.Group();
+    scene.add(hookGroup);
+
+    const metal = new THREE.MeshStandardMaterial({
+      color: 0xb8c0c4,
+      metalness: 0.72,
+      roughness: 0.27
+    });
+
+    const handleMat = new THREE.MeshStandardMaterial({
+      color: 0x4f6f65,
+      roughness: 0.58
+    });
+
+    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.085, 3.35, 28), metal);
+    shaft.rotation.z = Math.PI / 2;
+    shaft.castShadow = true;
+    hookGroup.add(shaft);
+
+    const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 1.1, 28), handleMat);
+    handle.rotation.z = Math.PI / 2;
+    handle.position.x = -1.65;
+    handle.castShadow = true;
+    hookGroup.add(handle);
+
+    const tip = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.36, 28), metal);
+    tip.rotation.z = -Math.PI / 2;
+    tip.position.x = 1.86;
+    tip.castShadow = true;
+    hookGroup.add(tip);
+
+    const throat = new THREE.Mesh(new THREE.TorusGeometry(0.155, 0.038, 14, 36, Math.PI * 1.15), metal);
+    throat.rotation.set(0, Math.PI / 2, Math.PI * 0.12);
+    throat.position.set(1.56, 0.13, 0);
+    throat.scale.set(1, 0.72, 1);
+    throat.castShadow = true;
+    hookGroup.add(throat);
+
+    hookGroup.position.set(0.25, 0.18, 0);
+    hookGroup.rotation.set(0.1, 0, -0.1);
+
+    const yarnMaterial = new THREE.MeshStandardMaterial({
+      color: 0xcf3f53,
+      roughness: 0.64,
+      metalness: 0.0
+    });
+
+    const yarn = {
+      points: [],
+      previous: [],
+      fixed: new Set([0, 1]),
+      segmentLength: 0.16,
+      radius: 0.055,
+      gravity: new THREE.Vector3(0, -0.018, 0),
+      damping: 0.985
+    };
+
+    for (let i = 0; i < 54; i++) {
+      const t = i / 53;
+      const angle = t * Math.PI * 2.5;
+      const p = new THREE.Vector3(
+        -2.15 + t * 4.0,
+        0.65 + Math.sin(angle) * 0.2,
+        Math.cos(angle) * 0.34
+      );
+      yarn.points.push(p);
+      yarn.previous.push(p.clone());
+    }
+
+    const curve = new THREE.CatmullRomCurve3(yarn.points);
+    const yarnMesh = new THREE.Mesh(
+      new THREE.TubeGeometry(curve, 180, yarn.radius, 12, false),
+      yarnMaterial
+    );
+    yarnMesh.castShadow = true;
+    scene.add(yarnMesh);
+
+    const beadMat = new THREE.MeshStandardMaterial({ color: 0xed9aa6, roughness: 0.52 });
+    const anchorGeo = new THREE.SphereGeometry(0.09, 18, 12);
+    for (const i of yarn.fixed) {
+      const bead = new THREE.Mesh(anchorGeo, beadMat);
+      bead.position.copy(yarn.points[i]);
+      bead.castShadow = true;
+      scene.add(bead);
+    }
+
+    const hookCapsule = {
+      a: new THREE.Vector3(-1.42, 0, 0),
+      b: new THREE.Vector3(1.72, 0, 0),
+      radius: 0.15
+    };
+
+    const tmpA = new THREE.Vector3();
+    const tmpB = new THREE.Vector3();
+    const tmpP = new THREE.Vector3();
+    const tmpAxis = new THREE.Vector3();
+
+    function hookEndpoint(localPoint) {
+      return hookGroup.localToWorld(localPoint.clone());
+    }
+
+    function closestPointOnSegment(point, a, b, target) {
+      tmpAxis.subVectors(b, a);
+      const t = THREE.MathUtils.clamp(point.clone().sub(a).dot(tmpAxis) / tmpAxis.lengthSq(), 0, 1);
+      return target.copy(a).addScaledVector(tmpAxis, t);
+    }
+
+    function collideWithHook(point) {
+      tmpA.copy(hookEndpoint(hookCapsule.a));
+      tmpB.copy(hookEndpoint(hookCapsule.b));
+      closestPointOnSegment(point, tmpA, tmpB, tmpP);
+
+      const delta = point.sub(tmpP);
+      const distance = delta.length();
+      const minDistance = hookCapsule.radius + yarn.radius;
+
+      if (distance < minDistance) {
+        if (distance < 0.0001) delta.set(0, 1, 0);
+        else delta.multiplyScalar(1 / distance);
+        point.copy(tmpP).addScaledVector(delta, minDistance);
+      }
+    }
+
+    function satisfyDistance(a, b, wanted, aFixed, bFixed) {
+      const delta = tmpAxis.subVectors(b, a);
+      const distance = Math.max(delta.length(), 0.0001);
+      const correction = (distance - wanted) / distance;
+
+      if (!aFixed && !bFixed) {
+        a.addScaledVector(delta, correction * 0.5);
+        b.addScaledVector(delta, -correction * 0.5);
+      } else if (!aFixed) {
+        a.addScaledVector(delta, correction);
+      } else if (!bFixed) {
+        b.addScaledVector(delta, -correction);
+      }
+    }
+
+    function stepYarn() {
+      for (let i = 0; i < yarn.points.length; i++) {
+        if (yarn.fixed.has(i)) continue;
+
+        const p = yarn.points[i];
+        const velocity = p.clone().sub(yarn.previous[i]).multiplyScalar(yarn.damping);
+        yarn.previous[i].copy(p);
+        p.add(velocity).add(yarn.gravity);
+        if (p.y < -1.18 + yarn.radius) p.y = -1.18 + yarn.radius;
+      }
+
+      for (let pass = 0; pass < 8; pass++) {
+        for (let i = 0; i < yarn.points.length - 1; i++) {
+          satisfyDistance(
+            yarn.points[i],
+            yarn.points[i + 1],
+            yarn.segmentLength,
+            yarn.fixed.has(i),
+            yarn.fixed.has(i + 1)
+          );
+        }
+
+        for (let i = 0; i < yarn.points.length; i++) {
+          if (!yarn.fixed.has(i)) collideWithHook(yarn.points[i]);
+        }
+      }
+    }
+
+    function updateYarnMesh() {
+      curve.points = yarn.points;
+      yarnMesh.geometry.dispose();
+      yarnMesh.geometry = new THREE.TubeGeometry(curve, 180, yarn.radius, 12, false);
+    }
+
+    function animate(time) {
+      requestAnimationFrame(animate);
+
+      const t = time * 0.001;
+      hookGroup.position.y = 0.2 + Math.sin(t * 0.9) * 0.04;
+      hookGroup.rotation.z = -0.12 + Math.sin(t * 0.7) * 0.035;
+
+      stepYarn();
+      updateYarnMesh();
+      updateCamera();
+      renderer.render(scene, camera);
+    }
+
+    addEventListener("resize", () => {
+      camera.aspect = innerWidth / innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+    });
+
+    animate(0);
+  </script>
+</body>
+</html>
