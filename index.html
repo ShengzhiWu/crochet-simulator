@@ -44,7 +44,8 @@
 <body>
   <div class="hud">
     <strong>钩织模拟器原型</strong>
-    <span>自写线段约束 + 钩针碰撞</span>
+    <span>点钩针后拖动，G 移动 / R 旋转，Q/E 滚转</span>
+    <span id="modeLabel">当前：视角</span>
   </div>
 
   <script type="module">
@@ -72,6 +73,21 @@
       y: 0
     };
 
+    const pointer = new THREE.Vector2();
+    const raycaster = new THREE.Raycaster();
+    const drag = {
+      active: false,
+      target: "view",
+      mode: "move",
+      x: 0,
+      y: 0
+    };
+    const modeLabel = document.getElementById("modeLabel");
+    const cameraRight = new THREE.Vector3();
+    const cameraUp = new THREE.Vector3();
+    const cameraForward = new THREE.Vector3();
+    const maxPitch = Math.PI / 2 - 0.001;
+
     function updateCamera() {
       const cp = Math.cos(view.pitch);
       camera.position.set(
@@ -82,30 +98,142 @@
       camera.lookAt(view.target);
     }
 
+    function updateModeLabel() {
+      const modeName = drag.target === "hook"
+        ? drag.mode === "move" ? "钩针移动" : "钩针旋转"
+        : "视角";
+      modeLabel.textContent = `当前：${modeName}`;
+    }
+
+    function setPointer(event) {
+      const rect = renderer.domElement.getBoundingClientRect();
+      pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+      pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    }
+
+    function isHookHit(event) {
+      setPointer(event);
+      raycaster.setFromCamera(pointer, camera);
+      return raycaster.intersectObjects(hookGroup.children, true).length > 0;
+    }
+
+    function cameraBasis() {
+      camera.getWorldDirection(cameraForward);
+      cameraRight.crossVectors(cameraForward, camera.up).normalize();
+      cameraUp.crossVectors(cameraRight, cameraForward).normalize();
+    }
+
+    function settleYarn(iterations = 16) {
+      for (let i = 0; i < iterations; i++) stepYarn();
+      for (let i = 0; i < yarn.points.length; i++) yarn.previous[i].copy(yarn.points[i]);
+      updateYarnMesh();
+    }
+
+    function hookTouchesYarn(padding = 0.08) {
+      tmpA.copy(hookEndpoint(hookCapsule.a));
+      tmpB.copy(hookEndpoint(hookCapsule.b));
+
+      for (const point of yarn.points) {
+        closestPointOnSegment(point, tmpA, tmpB, tmpP);
+        if (point.distanceTo(tmpP) < hookCapsule.radius + yarn.radius + padding) return true;
+      }
+
+      return false;
+    }
+
+    function reactToHookMove() {
+      if (hookTouchesYarn()) settleYarn();
+    }
+
     renderer.domElement.addEventListener("pointerdown", (event) => {
-      view.dragging = true;
+      drag.active = true;
+      drag.target = isHookHit(event) ? "hook" : "view";
+      drag.x = event.clientX;
+      drag.y = event.clientY;
+      view.dragging = drag.target === "view";
       view.x = event.clientX;
       view.y = event.clientY;
+      updateModeLabel();
       renderer.domElement.setPointerCapture(event.pointerId);
     });
 
     renderer.domElement.addEventListener("pointermove", (event) => {
-      if (!view.dragging) return;
-      view.yaw -= (event.clientX - view.x) * 0.006;
-      view.pitch = THREE.MathUtils.clamp(view.pitch + (event.clientY - view.y) * 0.006, -0.15, 1.15);
+      if (!drag.active) return;
+      const dx = event.clientX - drag.x;
+      const dy = event.clientY - drag.y;
+      drag.x = event.clientX;
+      drag.y = event.clientY;
+
+      if (drag.target === "hook") {
+        cameraBasis();
+
+        if (drag.mode === "move") {
+          hookGroup.position.addScaledVector(cameraRight, dx * 0.008);
+          hookGroup.position.addScaledVector(cameraUp, -dy * 0.008);
+        } else {
+          hookGroup.rotateOnWorldAxis(cameraUp, dx * 0.01);
+          hookGroup.rotateOnWorldAxis(cameraRight, dy * 0.01);
+        }
+
+        reactToHookMove();
+        renderScene();
+        return;
+      }
+
+      view.yaw -= dx * 0.006;
+      view.pitch = THREE.MathUtils.clamp(view.pitch + dy * 0.006, -maxPitch, maxPitch);
       view.x = event.clientX;
       view.y = event.clientY;
       renderScene();
     });
 
     renderer.domElement.addEventListener("pointerup", () => {
+      drag.active = false;
       view.dragging = false;
     });
 
     renderer.domElement.addEventListener("wheel", (event) => {
-      view.distance = THREE.MathUtils.clamp(view.distance + event.deltaY * 0.006, 4.5, 12);
+      if (drag.target === "hook") {
+        cameraBasis();
+        hookGroup.position.addScaledVector(cameraForward, event.deltaY * 0.006);
+        reactToHookMove();
+        renderScene();
+        return;
+      }
+
+      view.distance += event.deltaY * 0.006;
       renderScene();
     }, { passive: true });
+
+    addEventListener("keydown", (event) => {
+      const key = event.key.toLowerCase();
+
+      if (key === "g") {
+        drag.mode = "move";
+        drag.target = "hook";
+        updateModeLabel();
+      } else if (key === "r") {
+        drag.mode = "rotate";
+        drag.target = "hook";
+        updateModeLabel();
+      } else if (key === "escape") {
+        drag.target = "view";
+        updateModeLabel();
+      } else if (key === "q" || key === "e") {
+        drag.target = "hook";
+        hookGroup.rotateX((key === "q" ? 1 : -1) * 0.12);
+        reactToHookMove();
+        updateModeLabel();
+        renderScene();
+      } else if (key === "w" || key === "s") {
+        drag.target = "hook";
+        cameraBasis();
+        hookGroup.position.addScaledVector(cameraForward, (key === "w" ? 1 : -1) * 0.08);
+        reactToHookMove();
+        updateModeLabel();
+        renderScene();
+      }
+    });
 
     updateCamera();
 
@@ -168,7 +296,6 @@
       fixed: new Set([0, 1]),
       segmentLength: 0.16,
       radius: 0.055,
-      gravity: new THREE.Vector3(0, -0.018, 0),
       damping: 0.985
     };
 
@@ -211,6 +338,7 @@
     const tmpB = new THREE.Vector3();
     const tmpP = new THREE.Vector3();
     const tmpAxis = new THREE.Vector3();
+    const tmpDelta = new THREE.Vector3();
 
     function hookEndpoint(localPoint) {
       return hookGroup.localToWorld(localPoint.clone());
@@ -227,14 +355,14 @@
       tmpB.copy(hookEndpoint(hookCapsule.b));
       closestPointOnSegment(point, tmpA, tmpB, tmpP);
 
-      const delta = point.sub(tmpP);
+      const delta = tmpDelta.subVectors(point, tmpP);
       const distance = delta.length();
       const minDistance = hookCapsule.radius + yarn.radius;
 
       if (distance < minDistance) {
         if (distance < 0.0001) delta.set(0, 1, 0);
         else delta.multiplyScalar(1 / distance);
-        point.copy(tmpP).addScaledVector(delta, minDistance);
+        point.addScaledVector(delta, (minDistance - distance) * 0.45);
       }
     }
 
@@ -260,8 +388,7 @@
         const p = yarn.points[i];
         const velocity = p.clone().sub(yarn.previous[i]).multiplyScalar(yarn.damping);
         yarn.previous[i].copy(p);
-        p.add(velocity).add(yarn.gravity);
-        if (p.y < -1.18 + yarn.radius) p.y = -1.18 + yarn.radius;
+        p.add(velocity);
       }
 
       for (let pass = 0; pass < 8; pass++) {
