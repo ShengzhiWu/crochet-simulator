@@ -88,6 +88,7 @@
     const cameraUp = new THREE.Vector3();
     const cameraForward = new THREE.Vector3();
     const maxPitch = Math.PI / 2 - 0.001;
+    const defaultViewDistance = view.distance;
     const hookMoveMaxStep = 0.045;
     const hookStartPosition = new THREE.Vector3();
     const hookEndPosition = new THREE.Vector3();
@@ -226,8 +227,9 @@
 
         if (drag.mode === "move") {
           moveHookWithSubsteps(() => {
-            hookGroup.position.addScaledVector(cameraRight, dx * 0.008);
-            hookGroup.position.addScaledVector(cameraUp, -dy * 0.008);
+            const hookDragScale = 0.004 * view.distance / defaultViewDistance;
+            hookGroup.position.addScaledVector(cameraRight, dx * hookDragScale);
+            hookGroup.position.addScaledVector(cameraUp, -dy * hookDragScale);
           });
         } else {
           moveHookWithSubsteps(() => {
