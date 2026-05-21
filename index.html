@@ -456,6 +456,12 @@
     yarnMesh.castShadow = true;
     scene.add(yarnMesh);
 
+    const yarnEndCap = new THREE.Mesh(new THREE.CircleGeometry(yarn.radius, 18), yarnMaterial);
+    yarnEndCap.castShadow = true;
+    yarnEndCap.receiveShadow = true;
+    updateYarnEndCap();
+    scene.add(yarnEndCap);
+
     const beadMat = new THREE.MeshStandardMaterial({ color: 0xed9aa6, roughness: 0.52 });
     const anchorGeo = new THREE.SphereGeometry(0.09, 18, 12);
     const bead = new THREE.Mesh(anchorGeo, beadMat);
@@ -761,6 +767,15 @@
       curve.points = yarn.points;
       yarnMesh.geometry.dispose();
       yarnMesh.geometry = new THREE.TubeGeometry(curve, 180, yarn.radius, 12, false);
+      updateYarnEndCap();
+    }
+
+    function updateYarnEndCap() {
+      const last = yarn.points[yarn.points.length - 1];
+      const before = yarn.points[yarn.points.length - 2];
+      const normal = new THREE.Vector3().subVectors(last, before).normalize();
+      yarnEndCap.position.copy(last);
+      yarnEndCap.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
     }
 
     function renderScene() {
