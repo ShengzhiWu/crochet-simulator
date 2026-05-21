@@ -435,7 +435,7 @@
     const yarn = {
       points: [],
       previous: [],
-      fixed: new Set([0, 1]),
+      fixed: new Set([0]),
       segmentLength: 0,
       radius: 0.055,
       damping: 0.985,
@@ -591,17 +591,17 @@
       let fed = 0;
 
       while (fed < yarn.maxSourceFeedPerStep && yarn.points.length > 3) {
-        const source = yarn.points[1];
-        const next = yarn.points[2];
+        const source = yarn.points[0];
+        const next = yarn.points[1];
         const distance = source.distanceTo(next);
         if (distance <= yarn.segmentLength * yarn.sourceFeedThreshold) break;
 
         tmpDelta.subVectors(next, source).normalize();
         const newPoint = source.clone().addScaledVector(tmpDelta, yarn.segmentLength);
-        yarn.points.splice(2, 0, newPoint);
-        yarn.previous.splice(2, 0, newPoint.clone());
+        yarn.points.splice(1, 0, newPoint);
+        yarn.previous.splice(1, 0, newPoint.clone());
 
-        if (drag.target === "yarn" && drag.yarnIndex >= 2) drag.yarnIndex++;
+        if (drag.target === "yarn" && drag.yarnIndex >= 1) drag.yarnIndex++;
         fed++;
       }
 
