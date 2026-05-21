@@ -44,7 +44,7 @@
 <body>
   <div class="hud">
     <strong>钩织模拟器原型</strong>
-    <span>点钩针后拖动，G 移动 / R 旋转，Q/E 滚转，W/S 深度</span>
+    <span>点钩针后拖动，G 移动 / R 旋转，Q/E 滚转，W/S 深度，中键平移视角</span>
     <span id="modeLabel">当前：视角</span>
   </div>
 
@@ -79,6 +79,7 @@
       active: false,
       target: "view",
       mode: "move",
+      viewMode: "orbit",
       x: 0,
       y: 0
     };
@@ -98,9 +99,9 @@
     function updateCamera() {
       const cp = Math.cos(view.pitch);
       camera.position.set(
-        Math.sin(view.yaw) * cp * view.distance,
+        view.target.x + Math.sin(view.yaw) * cp * view.distance,
         Math.sin(view.pitch) * view.distance + view.target.y,
-        Math.cos(view.yaw) * cp * view.distance
+        view.target.z + Math.cos(view.yaw) * cp * view.distance
       );
       camera.lookAt(view.target);
     }
@@ -200,8 +201,10 @@
     }
 
     renderer.domElement.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
       drag.active = true;
-      drag.target = isHookHit(event) ? "hook" : "view";
+      drag.viewMode = event.button === 1 ? "pan" : "orbit";
+      drag.target = drag.viewMode === "pan" ? "view" : isHookHit(event) ? "hook" : "view";
       drag.x = event.clientX;
       drag.y = event.clientY;
       view.dragging = drag.target === "view";
@@ -237,8 +240,16 @@
         return;
       }
 
-      view.yaw -= dx * 0.006;
-      view.pitch = THREE.MathUtils.clamp(view.pitch + dy * 0.006, -maxPitch, maxPitch);
+      if (drag.viewMode === "pan") {
+        cameraBasis();
+        const panScale = view.distance * 0.0012;
+        view.target.addScaledVector(cameraRight, -dx * panScale);
+        view.target.addScaledVector(cameraUp, dy * panScale);
+      } else {
+        view.yaw -= dx * 0.006;
+        view.pitch = THREE.MathUtils.clamp(view.pitch + dy * 0.006, -maxPitch, maxPitch);
+      }
+
       view.x = event.clientX;
       view.y = event.clientY;
       renderScene();
@@ -253,6 +264,10 @@
       view.distance += event.deltaY * 0.006;
       renderScene();
     }, { passive: true });
+
+    renderer.domElement.addEventListener("auxclick", (event) => {
+      if (event.button === 1) event.preventDefault();
+    });
 
     addEventListener("keydown", (event) => {
       const key = event.key.toLowerCase();
