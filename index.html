@@ -44,7 +44,7 @@
 <body>
   <div class="hud">
     <strong>钩织模拟器原型</strong>
-    <span>点钩针后拖动，G 移动 / R 旋转，Q/E 滚转，W/S 深度，中键平移视角</span>
+    <span>拖动钩针或毛线，G 移动 / R 旋转，Q/E 滚转，W/S 深度，中键平移视角</span>
     <span id="modeLabel">当前：视角</span>
   </div>
 
@@ -82,6 +82,7 @@
       viewMode: "orbit",
       localGrabPoint: new THREE.Vector3(),
       hasGrabPoint: false,
+      yarnIndex: -1,
       x: 0,
       y: 0
     };
@@ -111,7 +112,7 @@
     function updateModeLabel() {
       const modeName = drag.target === "hook"
         ? drag.mode === "move" ? "钩针移动" : "钩针旋转"
-        : "视角";
+        : drag.target === "yarn" ? "毛线拖动" : "视角";
       modeLabel.textContent = `当前：${modeName}`;
     }
 
@@ -125,6 +126,26 @@
       setPointer(event);
       raycaster.setFromCamera(pointer, camera);
       return raycaster.intersectObjects(hookGroup.children, true)[0] || null;
+    }
+
+    function getYarnHit(event) {
+      setPointer(event);
+      raycaster.setFromCamera(pointer, camera);
+      const hit = raycaster.intersectObject(yarnMesh, false)[0];
+      if (!hit) return null;
+
+      let bestIndex = -1;
+      let bestDistance = Infinity;
+      for (let i = 0; i < yarn.points.length; i++) {
+        if (yarn.fixed.has(i)) continue;
+        const distance = yarn.points[i].distanceTo(hit.point);
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          bestIndex = i;
+        }
+      }
+
+      return bestIndex >= 0 ? { index: bestIndex, point: hit.point } : null;
     }
 
     function grabbedWorldPoint() {
@@ -219,9 +240,11 @@
       drag.active = true;
       drag.viewMode = event.button === 1 ? "pan" : "orbit";
       const hookHit = drag.viewMode === "pan" ? null : getHookHit(event);
-      drag.target = hookHit ? "hook" : "view";
+      const yarnHit = (hookHit || drag.viewMode === "pan") ? null : getYarnHit(event);
+      drag.target = hookHit ? "hook" : yarnHit ? "yarn" : "view";
       drag.hasGrabPoint = !!hookHit;
       if (hookHit) drag.localGrabPoint.copy(hookGroup.worldToLocal(hookHit.point.clone()));
+      drag.yarnIndex = yarnHit ? yarnHit.index : -1;
       drag.x = event.clientX;
       drag.y = event.clientY;
       view.dragging = drag.target === "view";
@@ -260,6 +283,18 @@
         return;
       }
 
+      if (drag.target === "yarn") {
+        cameraBasis();
+        const point = yarn.points[drag.yarnIndex];
+        const yarnDragScale = worldUnitsPerScreenPixelAt(point);
+        point.addScaledVector(cameraRight, dx * yarnDragScale);
+        point.addScaledVector(cameraUp, -dy * yarnDragScale);
+        yarn.previous[drag.yarnIndex].copy(point);
+        settleYarn();
+        renderScene();
+        return;
+      }
+
       if (drag.viewMode === "pan") {
         cameraBasis();
         const panScale = view.distance * 0.0012;
@@ -278,6 +313,7 @@
     renderer.domElement.addEventListener("pointerup", () => {
       drag.active = false;
       drag.hasGrabPoint = false;
+      drag.yarnIndex = -1;
       view.dragging = false;
     });
 
@@ -521,12 +557,16 @@
       }
     }
 
+    function isYarnFixed(index) {
+      return yarn.fixed.has(index) || (drag.active && drag.target === "yarn" && index === drag.yarnIndex);
+    }
+
     function moveYarnPoint(index, offset, scale) {
-      if (!yarn.fixed.has(index)) yarn.points[index].addScaledVector(offset, scale);
+      if (!isYarnFixed(index)) yarn.points[index].addScaledVector(offset, scale);
     }
 
     function limitBend(index) {
-      if (yarn.fixed.has(index)) return;
+      if (isYarnFixed(index)) return;
 
       const prev = yarn.points[index - 1];
       const point = yarn.points[index];
@@ -659,8 +699,8 @@
             yarn.points[i],
             yarn.points[i + 1],
             yarn.segmentLength,
-            yarn.fixed.has(i),
-            yarn.fixed.has(i + 1)
+            isYarnFixed(i),
+            isYarnFixed(i + 1)
           );
         }
 
@@ -675,7 +715,7 @@
         }
 
         for (let i = 0; i < yarn.points.length; i++) {
-          if (!yarn.fixed.has(i)) collideWithHook(yarn.points[i]);
+          if (!isYarnFixed(i)) collideWithHook(yarn.points[i]);
         }
 
         preventSelfIntersection();
@@ -688,8 +728,8 @@
           yarn.points[i],
           yarn.points[i + 1],
           yarn.segmentLength,
-          yarn.fixed.has(i),
-          yarn.fixed.has(i + 1)
+          isYarnFixed(i),
+          isYarnFixed(i + 1)
         );
       }
 
@@ -698,7 +738,7 @@
       }
 
       for (let i = 0; i < yarn.points.length; i++) {
-        if (!yarn.fixed.has(i)) collideWithHook(yarn.points[i]);
+        if (!isYarnFixed(i)) collideWithHook(yarn.points[i]);
       }
 
       preventSelfIntersection();
@@ -706,7 +746,7 @@
 
     function stepYarn() {
       for (let i = 0; i < yarn.points.length; i++) {
-        if (yarn.fixed.has(i)) continue;
+        if (isYarnFixed(i)) continue;
 
         const p = yarn.points[i];
         const velocity = p.clone().sub(yarn.previous[i]).multiplyScalar(yarn.damping);
