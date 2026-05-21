@@ -80,6 +80,8 @@
       target: "view",
       mode: "move",
       viewMode: "orbit",
+      localGrabPoint: new THREE.Vector3(),
+      hasGrabPoint: false,
       x: 0,
       y: 0
     };
@@ -88,7 +90,6 @@
     const cameraUp = new THREE.Vector3();
     const cameraForward = new THREE.Vector3();
     const maxPitch = Math.PI / 2 - 0.001;
-    const defaultViewDistance = view.distance;
     const hookMoveMaxStep = 0.045;
     const hookStartPosition = new THREE.Vector3();
     const hookEndPosition = new THREE.Vector3();
@@ -120,16 +121,28 @@
       pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
     }
 
-    function isHookHit(event) {
+    function getHookHit(event) {
       setPointer(event);
       raycaster.setFromCamera(pointer, camera);
-      return raycaster.intersectObjects(hookGroup.children, true).length > 0;
+      return raycaster.intersectObjects(hookGroup.children, true)[0] || null;
+    }
+
+    function grabbedWorldPoint() {
+      return hookGroup.localToWorld(drag.localGrabPoint.clone());
     }
 
     function cameraBasis() {
       camera.getWorldDirection(cameraForward);
       cameraRight.crossVectors(cameraForward, camera.up).normalize();
       cameraUp.crossVectors(cameraRight, cameraForward).normalize();
+    }
+
+    function worldUnitsPerScreenPixelAt(point) {
+      camera.getWorldDirection(cameraForward);
+      tmpDelta.subVectors(point, camera.position);
+      const depth = Math.max(0.001, tmpDelta.dot(cameraForward));
+      const visibleHeight = 2 * depth * Math.tan(THREE.MathUtils.degToRad(camera.fov) * 0.5);
+      return visibleHeight / renderer.domElement.clientHeight;
     }
 
     function settleYarn(iterations = 12) {
@@ -205,7 +218,10 @@
       event.preventDefault();
       drag.active = true;
       drag.viewMode = event.button === 1 ? "pan" : "orbit";
-      drag.target = drag.viewMode === "pan" ? "view" : isHookHit(event) ? "hook" : "view";
+      const hookHit = drag.viewMode === "pan" ? null : getHookHit(event);
+      drag.target = hookHit ? "hook" : "view";
+      drag.hasGrabPoint = !!hookHit;
+      if (hookHit) drag.localGrabPoint.copy(hookGroup.worldToLocal(hookHit.point.clone()));
       drag.x = event.clientX;
       drag.y = event.clientY;
       view.dragging = drag.target === "view";
@@ -227,7 +243,9 @@
 
         if (drag.mode === "move") {
           moveHookWithSubsteps(() => {
-            const hookDragScale = 0.004 * view.distance / defaultViewDistance;
+            const hookDragScale = worldUnitsPerScreenPixelAt(
+              drag.hasGrabPoint ? grabbedWorldPoint() : hookGroup.position
+            );
             hookGroup.position.addScaledVector(cameraRight, dx * hookDragScale);
             hookGroup.position.addScaledVector(cameraUp, -dy * hookDragScale);
           });
@@ -259,6 +277,7 @@
 
     renderer.domElement.addEventListener("pointerup", () => {
       drag.active = false;
+      drag.hasGrabPoint = false;
       view.dragging = false;
     });
 
