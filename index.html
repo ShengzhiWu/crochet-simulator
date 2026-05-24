@@ -790,8 +790,7 @@
     function updateYarnStats() {
       yarnStats.innerHTML = [
         `毛线离散化段数: ${yarn.points.length}`,
-        `普通段最大段长 / 放松间距: ${maxConstrainedSegmentLengthRatio().toFixed(3)}`,
-        `含源头最大段长 / 放松间距: ${maxSegmentLengthRatio().toFixed(3)}`
+        `最大段长 / 放松段长: ${maxConstrainedSegmentLengthRatio().toFixed(3)}`
       ].join("<br>");
     }
 
