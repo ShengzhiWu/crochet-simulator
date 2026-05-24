@@ -28,12 +28,6 @@
       text-shadow: 0 1px 0 rgba(255, 255, 255, 0.65);
     }
 
-    .hud strong {
-      display: block;
-      font-size: 14px;
-      margin-bottom: 3px;
-    }
-
     .hud span {
       display: block;
       font-size: 12px;
@@ -54,9 +48,7 @@
 </head>
 <body>
   <div class="hud">
-    <strong>钩织模拟器原型</strong>
-    <span>拖动钩针或毛线，G 移动 / R 旋转，Q/E 滚转，W/S 深度，中键平移视角</span>
-    <span id="modeLabel">当前：视角</span>
+    <span>拖拽移动钩针或毛线；按住 R 旋转钩针，R+滚轮滚转钩针，T+滚轮轴向平移钩针，中键平移场景</span>
   </div>
   <div class="stats" id="yarnStats">毛线离散化段数: 0</div>
 
@@ -91,7 +83,6 @@
     const drag = {
       active: false,
       target: "view",
-      mode: "move",
       viewMode: "orbit",
       localGrabPoint: new THREE.Vector3(),
       hasGrabPoint: false,
@@ -99,10 +90,16 @@
       x: 0,
       y: 0
     };
-    const modeLabel = document.getElementById("modeLabel");
+    const keys = {
+      rotateHook: false,
+      slideHook: false
+    };
     const cameraRight = new THREE.Vector3();
     const cameraUp = new THREE.Vector3();
     const cameraForward = new THREE.Vector3();
+    const hookAxisWorld = new THREE.Vector3();
+    const hookPivotWorld = new THREE.Vector3();
+    const hookRotation = new THREE.Quaternion();
     const maxPitch = Math.PI / 2 - 0.001;
     const hookMoveMaxStep = 0.045;
     const hookStartPosition = new THREE.Vector3();
@@ -120,13 +117,6 @@
         view.target.z + Math.cos(view.yaw) * cp * view.distance
       );
       camera.lookAt(view.target);
-    }
-
-    function updateModeLabel() {
-      const modeName = drag.target === "hook"
-        ? drag.mode === "move" ? "钩针移动" : "钩针旋转"
-        : drag.target === "yarn" ? "毛线拖动" : "视角";
-      modeLabel.textContent = `当前：${modeName}`;
     }
 
     function setPointer(event) {
@@ -205,6 +195,18 @@
       if (hookTouchesYarn()) settleYarn();
     }
 
+    function hookAxis() {
+      return hookAxisWorld.set(1, 0, 0).applyQuaternion(hookGroup.quaternion).normalize();
+    }
+
+    function rotateHookAroundPivot(axis, angle) {
+      hookGroup.updateMatrixWorld(true);
+      hookPivotWorld.copy(hookPivotLocal).applyMatrix4(hookGroup.matrixWorld);
+      hookRotation.setFromAxisAngle(axis.normalize(), angle);
+      hookGroup.quaternion.premultiply(hookRotation);
+      hookGroup.position.sub(hookPivotWorld).applyQuaternion(hookRotation).add(hookPivotWorld);
+    }
+
     function hookEndpointAt(localPoint, position, quaternion, target) {
       return target.copy(localPoint).applyQuaternion(quaternion).add(position);
     }
@@ -264,7 +266,6 @@
       view.dragging = drag.target === "view";
       view.x = event.clientX;
       view.y = event.clientY;
-      updateModeLabel();
       renderer.domElement.setPointerCapture(event.pointerId);
     });
 
@@ -278,7 +279,7 @@
       if (drag.target === "hook") {
         cameraBasis();
 
-        if (drag.mode === "move") {
+        if (!keys.rotateHook) {
           moveHookWithSubsteps(() => {
             const hookDragScale = worldUnitsPerScreenPixelAt(
               drag.hasGrabPoint ? grabbedWorldPoint() : hookGroup.position
@@ -288,8 +289,8 @@
           });
         } else {
           moveHookWithSubsteps(() => {
-            hookGroup.rotateOnWorldAxis(cameraUp, dx * 0.01);
-            hookGroup.rotateOnWorldAxis(cameraRight, dy * 0.01);
+            rotateHookAroundPivot(cameraUp, dx * 0.01);
+            rotateHookAroundPivot(cameraRight, dy * 0.01);
           });
         }
 
@@ -332,9 +333,17 @@
     });
 
     renderer.domElement.addEventListener("wheel", (event) => {
-      view.distance += event.deltaY * 0.006;
+      if (keys.rotateHook) {
+        event.preventDefault();
+        moveHookWithSubsteps(() => rotateHookAroundPivot(hookAxis(), -event.deltaY * 0.002));
+      } else if (keys.slideHook) {
+        event.preventDefault();
+        moveHookWithSubsteps(() => hookGroup.position.addScaledVector(hookAxis(), -event.deltaY * 0.002));
+      } else {
+        view.distance += event.deltaY * 0.006;
+      }
       renderScene();
-    }, { passive: true });
+    }, { passive: false });
 
     renderer.domElement.addEventListener("auxclick", (event) => {
       if (event.button === 1) event.preventDefault();
@@ -343,33 +352,15 @@
     addEventListener("keydown", (event) => {
       const key = event.key.toLowerCase();
 
-      if (key === "g") {
-        drag.mode = "move";
-        drag.target = "hook";
-        updateModeLabel();
-      } else if (key === "r") {
-        drag.mode = "rotate";
-        drag.target = "hook";
-        updateModeLabel();
-      } else if (key === "escape") {
-        drag.target = "view";
-        updateModeLabel();
-      } else if (key === "q" || key === "e") {
-        drag.target = "hook";
-        moveHookWithSubsteps(() => {
-          hookGroup.rotateX((key === "q" ? 1 : -1) * 0.12);
-        });
-        updateModeLabel();
-        renderScene();
-      } else if (key === "w" || key === "s") {
-        drag.target = "hook";
-        cameraBasis();
-        moveHookWithSubsteps(() => {
-          hookGroup.position.addScaledVector(cameraForward, (key === "w" ? 1 : -1) * 0.08);
-        });
-        updateModeLabel();
-        renderScene();
-      }
+      if (key === "r") keys.rotateHook = true;
+      else if (key === "t") keys.slideHook = true;
+    });
+
+    addEventListener("keyup", (event) => {
+      const key = event.key.toLowerCase();
+
+      if (key === "r") keys.rotateHook = false;
+      else if (key === "t") keys.slideHook = false;
     });
 
     updateCamera();
@@ -401,6 +392,7 @@
       new THREE.Vector3(2.87, 0.36, 0),
       new THREE.Vector3(2.73, 0.29, 0)
     ];
+    const hookPivotLocal = new THREE.Vector3(3.08, 0.22, 0);
 
     const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.085, 6.15, 28), metal);
     shaft.rotation.z = Math.PI / 2;
