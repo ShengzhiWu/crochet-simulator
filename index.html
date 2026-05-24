@@ -99,6 +99,8 @@
     const hookRotation = new THREE.Quaternion();
     const maxPitch = Math.PI / 2 - 0.001;
     const hookMoveMaxStep = 0.045;
+    const yarnDragMaxStepRatio = 0.45;
+    const stretchCleanupPasses = 24;
     const hookStartPosition = new THREE.Vector3();
     const hookEndPosition = new THREE.Vector3();
     const hookStartQuaternion = new THREE.Quaternion();
@@ -172,10 +174,33 @@
       return visibleHeight / renderer.domElement.clientHeight;
     }
 
-    function settleYarn(iterations = 12) {
-      feedYarnFromSource();
-      solveYarnConstraints(Math.max(iterations, 64));
+    function relaxYarn(iterations = 12) {
+      solveYarnConstraints(iterations);
+      if (feedYarnFromSource()) solveYarnConstraints(Math.max(6, Math.floor(iterations / 2)));
       for (let i = 0; i < yarn.points.length; i++) yarn.previous[i].copy(yarn.points[i]);
+    }
+
+    function settleYarn(iterations = 12) {
+      relaxYarn(iterations);
+      updateYarnMesh();
+    }
+
+    function moveDraggedYarnPoint(dx, dy) {
+      cameraBasis();
+      const point = yarn.points[drag.yarnIndex];
+      const scale = worldUnitsPerScreenPixelAt(point);
+      const moveX = dx * scale;
+      const moveY = -dy * scale;
+      const distance = Math.hypot(moveX, moveY);
+      const steps = Math.max(1, Math.ceil(distance / (yarn.segmentLength * yarnDragMaxStepRatio)));
+
+      for (let i = 0; i < steps; i++) {
+        point.addScaledVector(cameraRight, moveX / steps);
+        point.addScaledVector(cameraUp, moveY / steps);
+        yarn.previous[drag.yarnIndex].copy(point);
+        relaxYarn(18);
+      }
+
       updateYarnMesh();
     }
 
@@ -290,13 +315,7 @@
       }
 
       if (drag.target === "yarn") {
-        cameraBasis();
-        const point = yarn.points[drag.yarnIndex];
-        const yarnDragScale = worldUnitsPerScreenPixelAt(point);
-        point.addScaledVector(cameraRight, dx * yarnDragScale);
-        point.addScaledVector(cameraUp, -dy * yarnDragScale);
-        yarn.previous[drag.yarnIndex].copy(point);
-        settleYarn();
+        moveDraggedYarnPoint(dx, dy);
         renderScene();
         return;
       }
@@ -314,9 +333,14 @@
     });
 
     renderer.domElement.addEventListener("pointerup", () => {
+      const needsSettle = drag.target === "yarn" || drag.target === "hook";
       drag.active = false;
       drag.hasGrabPoint = false;
       drag.yarnIndex = -1;
+      if (needsSettle) {
+        settleYarn(48);
+        renderScene();
+      }
     });
 
     renderer.domElement.addEventListener("wheel", (event) => {
@@ -423,15 +447,16 @@
       segmentLength: 0,
       radius: 0.055,
       maxBendAngle: 0.275,  // The maximum exterior angle between two adjacent segments of the yarn
-      bendStrength: 0.14,
-      selfCollisionStrength: 0.2,
+      bendStrength: 0.22,
+      selfCollisionStrength: 0.45,
       hookCollisionScale: 0.6,
-      sourceFeedThreshold: 1.45,
-      maxSourceFeedPerStep: 8
+      maxSegmentStretchRatio: 1.12,
+      sourceFeedThreshold: 1.45
     };
+    const initialYarnPointCount = 81;
 
-    for (let i = 0; i < 54; i++) {
-      const t = i / 53;
+    for (let i = 0; i < initialYarnPointCount; i++) {
+      const t = i / (initialYarnPointCount - 1);
       const angle = t * Math.PI * 2.5;
       const p = new THREE.Vector3(
         -2.15 + t * 4.0,
@@ -566,25 +591,28 @@
       if (!isYarnFixed(index)) yarn.points[index].addScaledVector(offset, scale);
     }
 
+    function insertYarnFromSource() {
+      const source = yarn.points[0];
+      const next = yarn.points[1];
+      const direction = tmpDelta.subVectors(next, source);
+      if (direction.lengthSq() < 0.0001) direction.set(1, 0, 0);
+      else direction.normalize();
+
+      const newPoint = source.clone().addScaledVector(direction, yarn.segmentLength);
+      yarn.points.splice(1, 0, newPoint);
+      yarn.previous.splice(1, 0, newPoint.clone());
+
+      if (drag.target === "yarn" && drag.yarnIndex >= 1) drag.yarnIndex++;
+    }
+
     function feedYarnFromSource() {
-      let fed = 0;
+      if (yarn.points.length <= 3) return 0;
 
-      while (fed < yarn.maxSourceFeedPerStep && yarn.points.length > 3) {
-        const source = yarn.points[0];
-        const next = yarn.points[1];
-        const distance = source.distanceTo(next);
-        if (distance <= yarn.segmentLength * yarn.sourceFeedThreshold) break;
+      const sourceDistance = yarn.points[0].distanceTo(yarn.points[1]);
+      if (sourceDistance <= yarn.segmentLength * yarn.sourceFeedThreshold) return 0;
 
-        tmpDelta.subVectors(next, source).normalize();
-        const newPoint = source.clone().addScaledVector(tmpDelta, yarn.segmentLength);
-        yarn.points.splice(1, 0, newPoint);
-        yarn.previous.splice(1, 0, newPoint.clone());
-
-        if (drag.target === "yarn" && drag.yarnIndex >= 1) drag.yarnIndex++;
-        fed++;
-      }
-
-      return fed;
+      insertYarnFromSource();
+      return 1;
     }
 
     function limitBend(index) {
@@ -670,52 +698,19 @@
       }
     }
 
-    function minHookClearance() {
-      let clearance = Infinity;
-      const minDistance = hookYarnMinDistance();
-
-      for (let h = 0; h < hookCollisionPoints.length - 1; h++) {
-        hookSegmentEndpoints(h);
-
-        for (let i = 0; i < yarn.points.length - 1; i++) {
-          const params = closestSegmentParams(tmpA, tmpB, yarn.points[i], yarn.points[i + 1]);
-          tmpP.lerpVectors(tmpA, tmpB, params.s);
-          tmpDelta.lerpVectors(yarn.points[i], yarn.points[i + 1], params.t);
-          clearance = Math.min(clearance, tmpP.distanceTo(tmpDelta) - minDistance);
-        }
+    function projectYarnConstraints(applyBend, applySelfCollision) {
+      for (let i = 1; i < yarn.points.length - 1; i++) {
+        satisfyDistance(
+          yarn.points[i],
+          yarn.points[i + 1],
+          yarn.segmentLength,
+          isYarnFixed(i),
+          isYarnFixed(i + 1)
+        );
       }
 
-      return clearance;
-    }
-
-    function minSelfClearance() {
-      let clearance = Infinity;
-      const minDistance = yarn.radius * 2.15;
-
-      for (let i = 0; i < yarn.points.length - 1; i++) {
-        for (let j = i + 3; j < yarn.points.length - 1; j++) {
-          const params = closestSegmentParams(
-            yarn.points[i],
-            yarn.points[i + 1],
-            yarn.points[j],
-            yarn.points[j + 1]
-          );
-
-          tmpA.lerpVectors(yarn.points[i], yarn.points[i + 1], params.s);
-          tmpB.lerpVectors(yarn.points[j], yarn.points[j + 1], params.t);
-          clearance = Math.min(clearance, tmpA.distanceTo(tmpB) - minDistance);
-        }
-      }
-
-      return clearance;
-    }
-
-    function hasUnsafeClearance() {
-      return minHookClearance() < 0.002 || minSelfClearance() < 0.002;
-    }
-
-    function projectYarnConstraints(applyBend) {
-      for (let i = 0; i < yarn.points.length - 1; i++) {
+      for (let i = yarn.points.length - 2; i >= 0; i--) {
+        if (i === 0) continue;
         satisfyDistance(
           yarn.points[i],
           yarn.points[i + 1],
@@ -739,17 +734,31 @@
         if (!isYarnFixed(i)) collideWithHook(yarn.points[i]);
       }
 
-      preventSelfIntersection();
+      if (applySelfCollision) preventSelfIntersection();
+    }
+
+    function maxConstrainedSegmentLengthRatio() {
+      let maxLength = 0;
+
+      for (let i = 1; i < yarn.points.length - 1; i++) {
+        maxLength = Math.max(maxLength, yarn.points[i].distanceTo(yarn.points[i + 1]));
+      }
+
+      return maxLength / yarn.segmentLength;
     }
 
     function solveYarnConstraints(maxPasses = 48) {
       for (let pass = 0; pass < maxPasses; pass++) {
-        projectYarnConstraints(pass % 2 === 0);
-        const fed = feedYarnFromSource();
-        if (fed === 0 && !hasUnsafeClearance()) break;
+        projectYarnConstraints(true, true);
+        if (maxConstrainedSegmentLengthRatio() <= yarn.maxSegmentStretchRatio) break;
       }
 
-      projectYarnConstraints(false);
+      projectYarnConstraints(false, true);
+
+      for (let pass = 0; pass < stretchCleanupPasses; pass++) {
+        if (maxConstrainedSegmentLengthRatio() <= yarn.maxSegmentStretchRatio) break;
+        projectYarnConstraints(false, true);
+      }
     }
 
     function updateYarnMesh() {
@@ -768,8 +777,22 @@
       yarnEndCap.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
     }
 
+    function maxSegmentLengthRatio() {
+      let maxLength = 0;
+
+      for (let i = 0; i < yarn.points.length - 1; i++) {
+        maxLength = Math.max(maxLength, yarn.points[i].distanceTo(yarn.points[i + 1]));
+      }
+
+      return maxLength / yarn.segmentLength;
+    }
+
     function updateYarnStats() {
-      yarnStats.textContent = `毛线离散化段数: ${yarn.points.length}`;
+      yarnStats.innerHTML = [
+        `毛线离散化段数: ${yarn.points.length}`,
+        `普通段最大段长 / 放松间距: ${maxConstrainedSegmentLengthRatio().toFixed(3)}`,
+        `含源头最大段长 / 放松间距: ${maxSegmentLengthRatio().toFixed(3)}`
+      ].join("<br>");
     }
 
     function renderScene() {
