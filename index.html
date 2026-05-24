@@ -71,10 +71,7 @@
       target: new THREE.Vector3(0, 0.55, 0),
       distance: 8.4,
       yaw: 0,
-      pitch: 0.35,
-      dragging: false,
-      x: 0,
-      y: 0
+      pitch: 0.35
     };
 
     const pointer = new THREE.Vector2();
@@ -108,6 +105,7 @@
     const hookEndQuaternion = new THREE.Quaternion();
     const hookProbeStart = new THREE.Vector3();
     const hookProbeEnd = new THREE.Vector3();
+    const hookGrabWorld = new THREE.Vector3();
 
     function updateCamera() {
       const cp = Math.cos(view.pitch);
@@ -160,10 +158,6 @@
       return { target: "hook", point: hit.point };
     }
 
-    function grabbedWorldPoint() {
-      return hookGroup.localToWorld(drag.localGrabPoint.clone());
-    }
-
     function cameraBasis() {
       camera.getWorldDirection(cameraForward);
       cameraRight.crossVectors(cameraForward, camera.up).normalize();
@@ -198,14 +192,6 @@
       }
 
       return false;
-    }
-
-    function reactToHookMove() {
-      if (hookTouchesYarn()) settleYarn();
-    }
-
-    function hookAxis() {
-      return hookAxisWorld.set(1, 0, 0).applyQuaternion(hookGroup.quaternion).normalize();
     }
 
     function rotateHookAroundPivot(axis, angle) {
@@ -256,7 +242,7 @@
         hookGroup.position.lerpVectors(hookStartPosition, hookEndPosition, t);
         hookGroup.quaternion.slerpQuaternions(hookStartQuaternion, hookEndQuaternion, t);
         hookGroup.updateMatrixWorld(true);
-        reactToHookMove();
+        if (hookTouchesYarn()) settleYarn();
       }
     }
 
@@ -271,9 +257,6 @@
       drag.yarnIndex = hit?.target === "yarn" ? hit.index : -1;
       drag.x = event.clientX;
       drag.y = event.clientY;
-      view.dragging = drag.target === "view";
-      view.x = event.clientX;
-      view.y = event.clientY;
       renderer.domElement.setPointerCapture(event.pointerId);
     });
 
@@ -290,7 +273,7 @@
         if (!keys.rotateHook) {
           moveHookWithSubsteps(() => {
             const hookDragScale = worldUnitsPerScreenPixelAt(
-              drag.hasGrabPoint ? grabbedWorldPoint() : hookGroup.position
+              drag.hasGrabPoint ? hookGroup.localToWorld(hookGrabWorld.copy(drag.localGrabPoint)) : hookGroup.position
             );
             hookGroup.position.addScaledVector(cameraRight, dx * hookDragScale);
             hookGroup.position.addScaledVector(cameraUp, -dy * hookDragScale);
@@ -327,9 +310,6 @@
         view.yaw -= dx * 0.006;
         view.pitch = THREE.MathUtils.clamp(view.pitch + dy * 0.006, -maxPitch, maxPitch);
       }
-
-      view.x = event.clientX;
-      view.y = event.clientY;
       renderScene();
     });
 
@@ -337,16 +317,19 @@
       drag.active = false;
       drag.hasGrabPoint = false;
       drag.yarnIndex = -1;
-      view.dragging = false;
     });
 
     renderer.domElement.addEventListener("wheel", (event) => {
       if (keys.rotateHook) {
         event.preventDefault();
-        moveHookWithSubsteps(() => rotateHookAroundPivot(hookAxis(), -event.deltaY * 0.002));
+        moveHookWithSubsteps(() => {
+          hookAxisWorld.set(1, 0, 0).applyQuaternion(hookGroup.quaternion).normalize();
+          rotateHookAroundPivot(hookAxisWorld, -event.deltaY * 0.002);
+        });
       } else if (keys.slideHook) {
         event.preventDefault();
-        moveHookWithSubsteps(() => hookGroup.position.addScaledVector(hookAxis(), -event.deltaY * 0.002));
+        hookAxisWorld.set(1, 0, 0).applyQuaternion(hookGroup.quaternion).normalize();
+        moveHookWithSubsteps(() => hookGroup.position.addScaledVector(hookAxisWorld, -event.deltaY * 0.002));
       } else {
         view.distance += event.deltaY * 0.006;
       }
@@ -439,7 +422,6 @@
       fixed: new Set([0]),
       segmentLength: 0,
       radius: 0.055,
-      damping: 0.985,
       maxBendAngle: 0.275,  // The maximum exterior angle between two adjacent segments of the yarn
       bendStrength: 0.14,
       selfCollisionStrength: 0.2,
@@ -499,22 +481,18 @@
     const tmpMid = new THREE.Vector3();
     const tmpClosest = new THREE.Vector3();
 
-    function hookEndpoint(localPoint) {
-      return hookGroup.localToWorld(localPoint.clone());
-    }
-
     function hookYarnMinDistance() {
       return (hookCollisionRadius + yarn.radius) * yarn.hookCollisionScale;
     }
 
     function hookSegmentEndpoints(index) {
-      tmpA.copy(hookEndpoint(hookCollisionPoints[index]));
-      tmpB.copy(hookEndpoint(hookCollisionPoints[index + 1]));
+      hookGroup.localToWorld(tmpA.copy(hookCollisionPoints[index]));
+      hookGroup.localToWorld(tmpB.copy(hookCollisionPoints[index + 1]));
     }
 
     function closestPointOnSegment(point, a, b, target) {
       tmpAxis.subVectors(b, a);
-      const t = THREE.MathUtils.clamp(point.clone().sub(a).dot(tmpAxis) / tmpAxis.lengthSq(), 0, 1);
+      const t = THREE.MathUtils.clamp(tmpDelta.subVectors(point, a).dot(tmpAxis) / tmpAxis.lengthSq(), 0, 1);
       return target.copy(a).addScaledVector(tmpAxis, t);
     }
 
@@ -736,38 +714,7 @@
       return minHookClearance() < 0.002 || minSelfClearance() < 0.002;
     }
 
-    function solveYarnConstraints(maxPasses = 48) {
-      for (let pass = 0; pass < maxPasses; pass++) {
-        for (let i = 0; i < yarn.points.length - 1; i++) {
-          satisfyDistance(
-            yarn.points[i],
-            yarn.points[i + 1],
-            yarn.segmentLength,
-            isYarnFixed(i),
-            isYarnFixed(i + 1)
-          );
-        }
-
-        if (pass % 2 === 0) {
-          for (let i = 1; i < yarn.points.length - 1; i++) {
-            limitBend(i);
-          }
-        }
-
-        for (let i = 0; i < yarn.points.length - 1; i++) {
-          collideSegmentWithHook(i);
-        }
-
-        for (let i = 0; i < yarn.points.length; i++) {
-          if (!isYarnFixed(i)) collideWithHook(yarn.points[i]);
-        }
-
-        preventSelfIntersection();
-        const fed = feedYarnFromSource();
-
-        if (fed === 0 && !hasUnsafeClearance()) break;
-      }
-
+    function projectYarnConstraints(applyBend) {
       for (let i = 0; i < yarn.points.length - 1; i++) {
         satisfyDistance(
           yarn.points[i],
@@ -776,6 +723,12 @@
           isYarnFixed(i),
           isYarnFixed(i + 1)
         );
+      }
+
+      if (applyBend) {
+        for (let i = 1; i < yarn.points.length - 1; i++) {
+          limitBend(i);
+        }
       }
 
       for (let i = 0; i < yarn.points.length - 1; i++) {
@@ -789,17 +742,14 @@
       preventSelfIntersection();
     }
 
-    function stepYarn() {
-      for (let i = 0; i < yarn.points.length; i++) {
-        if (isYarnFixed(i)) continue;
-
-        const p = yarn.points[i];
-        const velocity = p.clone().sub(yarn.previous[i]).multiplyScalar(yarn.damping);
-        yarn.previous[i].copy(p);
-        p.add(velocity);
+    function solveYarnConstraints(maxPasses = 48) {
+      for (let pass = 0; pass < maxPasses; pass++) {
+        projectYarnConstraints(pass % 2 === 0);
+        const fed = feedYarnFromSource();
+        if (fed === 0 && !hasUnsafeClearance()) break;
       }
 
-      solveYarnConstraints();
+      projectYarnConstraints(false);
     }
 
     function updateYarnMesh() {
@@ -835,7 +785,6 @@
     });
 
     settleYarn(80);
-    updateYarnStats();
     renderScene();
   </script>
 </body>
