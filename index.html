@@ -125,30 +125,39 @@
       pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
     }
 
-    function getHookHit(event) {
-      setPointer(event);
-      raycaster.setFromCamera(pointer, camera);
-      return raycaster.intersectObjects(hookGroup.children, true)[0] || null;
-    }
-
-    function getYarnHit(event) {
-      setPointer(event);
-      raycaster.setFromCamera(pointer, camera);
-      const hit = raycaster.intersectObject(yarnMesh, false)[0];
-      if (!hit) return null;
-
+    function closestYarnIndex(point) {
       let bestIndex = -1;
       let bestDistance = Infinity;
       for (let i = 0; i < yarn.points.length; i++) {
         if (yarn.fixed.has(i)) continue;
-        const distance = yarn.points[i].distanceTo(hit.point);
+        const distance = yarn.points[i].distanceTo(point);
         if (distance < bestDistance) {
           bestDistance = distance;
           bestIndex = i;
         }
       }
 
-      return bestIndex >= 0 ? { index: bestIndex, point: hit.point } : null;
+      return bestIndex;
+    }
+
+    function getPointerHit(event) {
+      setPointer(event);
+      raycaster.setFromCamera(pointer, camera);
+      const hits = raycaster.intersectObjects([...hookGroup.children, yarnMesh, yarnEndCap], true);
+      const hit = hits[0];
+      if (!hit) return null;
+
+      if (hit.object === yarnMesh) {
+        const index = closestYarnIndex(hit.point);
+        return index >= 0 ? { target: "yarn", index } : null;
+      }
+
+      if (hit.object === yarnEndCap) {
+        const index = yarn.points.length - 1;
+        return yarn.fixed.has(index) ? null : { target: "yarn", index };
+      }
+
+      return { target: "hook", point: hit.point };
     }
 
     function grabbedWorldPoint() {
@@ -255,12 +264,11 @@
       event.preventDefault();
       drag.active = true;
       drag.viewMode = event.button === 1 ? "pan" : "orbit";
-      const hookHit = drag.viewMode === "pan" ? null : getHookHit(event);
-      const yarnHit = (hookHit || drag.viewMode === "pan") ? null : getYarnHit(event);
-      drag.target = hookHit ? "hook" : yarnHit ? "yarn" : "view";
-      drag.hasGrabPoint = !!hookHit;
-      if (hookHit) drag.localGrabPoint.copy(hookGroup.worldToLocal(hookHit.point.clone()));
-      drag.yarnIndex = yarnHit ? yarnHit.index : -1;
+      const hit = drag.viewMode === "pan" ? null : getPointerHit(event);
+      drag.target = hit ? hit.target : "view";
+      drag.hasGrabPoint = hit?.target === "hook";
+      if (drag.hasGrabPoint) drag.localGrabPoint.copy(hookGroup.worldToLocal(hit.point.clone()));
+      drag.yarnIndex = hit?.target === "yarn" ? hit.index : -1;
       drag.x = event.clientX;
       drag.y = event.clientY;
       view.dragging = drag.target === "view";
@@ -421,7 +429,8 @@
     const yarnMaterial = new THREE.MeshStandardMaterial({
       color: 0xcf3f53,
       roughness: 0.64,
-      metalness: 0.0
+      metalness: 0.0,
+      side: THREE.DoubleSide
     });
 
     const yarn = {
